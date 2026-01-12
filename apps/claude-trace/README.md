@@ -47,14 +47,14 @@ claude-trace --exec python -- examples/quick_start.py --some-arg
 
 ## Output Location
 
-Logs are saved to `~/.claude-trace/<cwd-sanitized>/log-YYYY-MM-DD-HH-MM-SS.{jsonl,html}`.
+Logs are saved to `~/tmp/claude-trace/<cwd-sanitized>/log-YYYY-MM-DD-HH-MM-SS.{jsonl,html}`.
 
 **Path sanitization:** Your current working directory path is converted to a folder name by replacing slashes with dashes:
 
 - `/home/jan/project` → `home-jan-project`
 - `/` → `_root`
 
-**Example:** Running from `/home/jan/myapp` saves to `~/.claude-trace/home-jan-myapp/`.
+**Example:** Running from `/home/jan/myapp` saves to `~/tmp/claude-trace/home-jan-myapp/`.
 
 **Override:** Use `--output-base-dir /custom/path` to change the base directory.
 
@@ -161,7 +161,7 @@ The built artifacts are ready for npm publishing and include:
 1. **Backend** (`src/`)
 
    - **CLI** (`cli.ts`) - Command-line interface and argument parsing. Launches Claude Code and injects interceptors
-   - **Interceptor** (`interceptor.ts`) - injects itself into Claude Code, intercepts calls to fetch(), and logs them to JSONL files in ~/.claude-trace/<cwd-sanitized>/
+   - **Interceptor** (`interceptor.ts`) - injects itself into Claude Code, intercepts calls to fetch(), and logs them to JSONL files in ~/tmp/claude-trace/<cwd-sanitized>/
    - **HTML Generator** (`html-generator.ts`) - Embeds frontend into self-contained HTML reports
    - **Index Generator** (`index-generator.ts`) - Creates AI-powered conversation summaries and searchable index
    - **Shared Conversation Processor** (`shared-conversation-processor.ts`) - Core conversation processing logic shared between frontend and backend
