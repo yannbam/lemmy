@@ -8,18 +8,44 @@ import { HTMLGenerator } from "./html-generator";
 import { sanitizeCwd, getDefaultTraceDir } from "./interceptor";
 
 /**
- * Migrate old CWD/.claude-trace/ directory to new centralized location.
- * Only migrates if old exists and new doesn't.
+ * Migrate old trace directories to new centralized location.
+ * Handles:
+ * 1. CWD/.claude-trace/ → ~/tmp/claude-trace/<sanitized-cwd>/
+ * 2. ~/.claude-trace/<sanitized-cwd>/ → ~/tmp/claude-trace/<sanitized-cwd>/
  */
 function migrateOldTraceDir(newTraceDir: string): void {
-	const oldDir = path.join(process.cwd(), ".claude-trace");
+	const sanitized = sanitizeCwd(process.cwd());
 
-	// Only migrate if old exists and new doesn't
-	if (fs.existsSync(oldDir) && !fs.existsSync(newTraceDir)) {
-		log(`Migrating traces: ${oldDir} → ${newTraceDir}`, "yellow");
+	// Migration 1: Old CWD/.claude-trace/ to new location
+	const oldCwdDir = path.join(process.cwd(), ".claude-trace");
+	if (fs.existsSync(oldCwdDir) && !fs.existsSync(newTraceDir)) {
+		log(`Migrating traces: ${oldCwdDir} → ${newTraceDir}`, "yellow");
 		fs.mkdirSync(path.dirname(newTraceDir), { recursive: true });
-		fs.renameSync(oldDir, newTraceDir);
+		fs.renameSync(oldCwdDir, newTraceDir);
 		log(`Migration complete`, "green");
+		return;
+	}
+
+	// Migration 2: Old ~/.claude-trace/ (hidden) to ~/tmp/claude-trace/
+	const oldHiddenBase = path.join(os.homedir(), ".claude-trace");
+	const oldHiddenDir = path.join(oldHiddenBase, sanitized);
+
+	if (fs.existsSync(oldHiddenDir) && !fs.existsSync(newTraceDir)) {
+		log(`Migrating traces: ${oldHiddenDir} → ${newTraceDir}`, "yellow");
+		fs.mkdirSync(path.dirname(newTraceDir), { recursive: true });
+		fs.renameSync(oldHiddenDir, newTraceDir);
+		log(`Migration complete`, "green");
+
+		// Clean up old hidden base if empty
+		try {
+			const remaining = fs.readdirSync(oldHiddenBase);
+			if (remaining.length === 0) {
+				fs.rmdirSync(oldHiddenBase);
+				log(`Removed empty ${oldHiddenBase}`, "green");
+			}
+		} catch {
+			// Ignore cleanup errors
+		}
 	}
 }
 
@@ -55,7 +81,7 @@ ${colors.yellow}OPTIONS:${colors.reset}
   --include-all-requests Include all requests made through fetch, otherwise only requests to v1/messages with more than 2 messages in the context
   --no-open          Don't open generated HTML file in browser
   --log              Specify custom log file base name (without extension)
-  --output-base-dir  Override base directory (default: ~/.claude-trace)
+  --output-base-dir  Override base directory (default: ~/tmp/claude-trace)
   --claude-path      Specify custom path to Claude binary
   --help, -h         Show this help message
 
@@ -123,7 +149,7 @@ ${colors.yellow}EXAMPLES:${colors.reset}
   claude-trace --claude-path /usr/local/bin/claude
 
 ${colors.yellow}OUTPUT:${colors.reset}
-  Default:  ${colors.green}~/.claude-trace/<cwd-sanitized>/log-YYYY-MM-DD-HH-MM-SS.{jsonl,html}${colors.reset}
+  Default:  ${colors.green}~/tmp/claude-trace/<cwd-sanitized>/log-YYYY-MM-DD-HH-MM-SS.{jsonl,html}${colors.reset}
   With --log NAME:               ${colors.green}.../<cwd-sanitized>/NAME.{jsonl,html}${colors.reset}
   With --output-base-dir <path>: ${colors.green}<path>/<cwd-sanitized>/log-...{jsonl,html}${colors.reset}
 

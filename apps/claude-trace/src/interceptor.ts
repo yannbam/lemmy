@@ -19,11 +19,11 @@ export function sanitizeCwd(cwd: string): string {
 
 /**
  * Get the default trace directory based on the current working directory.
- * Default: $HOME/.claude-trace/<sanitized-cwd>/
+ * Default: $HOME/tmp/claude-trace/<sanitized-cwd>/
  * With baseDir override: <baseDir>/<sanitized-cwd>/
  */
 export function getDefaultTraceDir(baseDir?: string): string {
-	const base = baseDir || path.join(os.homedir(), ".claude-trace");
+	const base = baseDir || path.join(os.homedir(), "tmp", "claude-trace");
 	const sanitized = sanitizeCwd(process.cwd());
 	return path.join(base, sanitized);
 }
@@ -31,7 +31,7 @@ export function getDefaultTraceDir(baseDir?: string): string {
 export interface InterceptorConfig {
 	logDirectory?: string;
 	logBaseName?: string;
-	baseDir?: string; // Override base directory (default: $HOME/.claude-trace)
+	baseDir?: string; // Override base directory (default: $HOME/tmp/claude-trace)
 	enableRealTimeHTML?: boolean;
 	logLevel?: "debug" | "info" | "warn" | "error";
 }
@@ -183,6 +183,15 @@ export class ClaudeTrafficLogger {
 			} else {
 				// For other types, try to read as text
 				const body_raw = await response.text();
+				// Check for binary content (gzip magic bytes or control characters)
+				// Binary data in JSON breaks HTML rendering in browsers
+				if (
+					body_raw.length > 0 &&
+					(body_raw.charCodeAt(0) === 0x1f || /[\x00-\x08\x0e-\x1f]/.test(body_raw.slice(0, 100)))
+				) {
+					// Base64 encode binary content to preserve it safely
+					return { body_raw: `[binary:base64]${Buffer.from(body_raw, "binary").toString("base64")}` };
+				}
 				return { body_raw };
 			}
 		} catch (error) {
