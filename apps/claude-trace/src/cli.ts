@@ -51,6 +51,7 @@ ${colors.yellow}OPTIONS:${colors.reset}
   --generate-html    Generate HTML report from JSONL file
   --index           Generate conversation summaries and index for trace directory
   --run-with         Pass all following arguments to Claude process
+  --exec COMMAND     Run command with claude tracing (injects traced claude into PATH)
   --include-all-requests Include all requests made through fetch, otherwise only requests to v1/messages with more than 2 messages in the context
   --no-open          Don't open generated HTML file in browser
   --log              Specify custom log file base name (without extension)
@@ -76,6 +77,10 @@ ${colors.yellow}MODES:${colors.reset}
 
   ${colors.green}Indexing:${colors.reset}
     claude-trace --index                             Generate conversation summaries and index
+
+  ${colors.green}Exec mode (trace child processes):${colors.reset}
+    claude-trace --exec "python script.py"           Run command with traced claude in PATH
+    claude-trace --exec python -- script.py --arg   Run with separate args (no quoting needed)
 
 ${colors.yellow}EXAMPLES:${colors.reset}
   # Start Claude with logging
@@ -107,6 +112,12 @@ ${colors.yellow}EXAMPLES:${colors.reset}
 
   # Generate conversation index
   claude-trace --index
+
+  # Trace Python scripts using Agent SDK
+  claude-trace --exec "python my_agent_script.py"
+
+  # Trace with separate args
+  claude-trace --exec python -- examples/quick_start.py --some-option
 
   # Use custom Claude binary path
   claude-trace --claude-path /usr/local/bin/claude
@@ -324,6 +335,107 @@ async function runClaudeWithInterception(
 		const err = error as Error;
 		log(`Unexpected error: ${err.message}`, "red");
 		process.exit(1);
+	}
+}
+
+// Scenario 5: --exec -> run arbitrary command with traced claude injected into PATH
+async function runCommandWithTracedClaude(
+	command: string,
+	args: string[],
+	includeAllRequests: boolean,
+	openInBrowser: boolean,
+	customClaudePath?: string,
+	logBaseName?: string,
+	outputBaseDir?: string,
+): Promise<void> {
+	log("Claude Trace (exec mode)", "blue");
+	const fullCmd = args.length > 0 ? `${command} ${args.join(" ")}` : command;
+	log(`Running: ${fullCmd}`, "yellow");
+	console.log("");
+
+	// Get real claude path (resolves symlinks to cli.js)
+	const claudePath = getClaudeAbsolutePath(customClaudePath);
+	const loaderPath = getLoaderPath();
+
+	// Create temp directory with wrapper script
+	const wrapperDir = fs.mkdtempSync(path.join(os.tmpdir(), "claude-trace-"));
+	const wrapperPath = path.join(wrapperDir, "claude");
+
+	// Bash wrapper: intercepts `claude` calls and runs them with tracing
+	const wrapperScript = `#!/bin/bash
+exec node --require "${loaderPath}" "${claudePath}" "$@"
+`;
+	fs.writeFileSync(wrapperPath, wrapperScript, { mode: 0o755 });
+
+	log(`Wrapper: ${wrapperPath}`, "blue");
+	log(`Real claude: ${claudePath}`, "blue");
+	console.log("");
+
+	// Build environment for child process
+	const childEnv = {
+		...process.env,
+		PATH: `${wrapperDir}:${process.env.PATH}`,
+		NODE_OPTIONS: "--no-deprecation",
+		CLAUDE_TRACE_INCLUDE_ALL_REQUESTS: includeAllRequests ? "true" : "false",
+		CLAUDE_TRACE_OPEN_BROWSER: openInBrowser ? "true" : "false",
+		...(logBaseName ? { CLAUDE_TRACE_LOG_NAME: logBaseName } : {}),
+		...(outputBaseDir ? { CLAUDE_TRACE_BASE_DIR: outputBaseDir } : {}),
+	};
+
+	// Spawn: either shell mode (quoted string) or direct mode (with args)
+	const useShell = args.length === 0;
+	const child: ChildProcess = useShell
+		? spawn(command, {
+				shell: true,
+				env: childEnv,
+				stdio: "inherit",
+				cwd: process.cwd(),
+			})
+		: spawn(command, args, {
+				env: childEnv,
+				stdio: "inherit",
+				cwd: process.cwd(),
+			});
+
+	// Cleanup temp wrapper on exit
+	const cleanup = () => {
+		try {
+			fs.unlinkSync(wrapperPath);
+			fs.rmdirSync(wrapperDir);
+		} catch {
+			// Ignore cleanup errors
+		}
+	};
+
+	// Forward signals to child
+	const handleSignal = (signal: string) => {
+		log(`\nReceived ${signal}, shutting down...`, "yellow");
+		if (child.pid) {
+			child.kill(signal as NodeJS.Signals);
+		}
+	};
+
+	process.on("SIGINT", () => handleSignal("SIGINT"));
+	process.on("SIGTERM", () => handleSignal("SIGTERM"));
+
+	// Wait for completion
+	try {
+		await new Promise<void>((resolve, reject) => {
+			child.on("exit", (code) => {
+				cleanup();
+				if (code !== 0 && code !== null) {
+					log(`\nCommand exited with code: ${code}`, "yellow");
+				}
+				resolve();
+			});
+			child.on("error", (err) => {
+				cleanup();
+				reject(err);
+			});
+		});
+	} catch (error) {
+		cleanup();
+		throw error;
 	}
 }
 
@@ -556,6 +668,41 @@ async function main(): Promise<void> {
 	// Scenario 4: --index
 	if (claudeTraceArgs.includes("--index")) {
 		await generateIndex(outputBaseDir);
+		return;
+	}
+
+	// Scenario 5: --exec COMMAND [-- args...]
+	if (claudeTraceArgs.includes("--exec")) {
+		const execIndex = claudeTraceArgs.indexOf("--exec");
+		const dashDashIndex = claudeTraceArgs.indexOf("--", execIndex);
+
+		let execCommand: string;
+		let execArgs: string[];
+
+		if (dashDashIndex !== -1) {
+			// Syntax: --exec program -- arg1 arg2
+			execCommand = claudeTraceArgs[execIndex + 1];
+			execArgs = claudeTraceArgs.slice(dashDashIndex + 1);
+		} else {
+			// Syntax: --exec "command with args"
+			execCommand = claudeTraceArgs[execIndex + 1];
+			execArgs = [];
+		}
+
+		if (!execCommand) {
+			log("Missing command for --exec", "red");
+			process.exit(1);
+		}
+
+		await runCommandWithTracedClaude(
+			execCommand,
+			execArgs,
+			includeAllRequests,
+			openInBrowser,
+			customClaudePath,
+			logBaseName,
+			outputBaseDir,
+		);
 		return;
 	}
 

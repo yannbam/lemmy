@@ -37,6 +37,12 @@ claude-trace --generate-html logs.jsonl --include-all-requests
 
 # Generate conversation summaries and searchable index
 claude-trace --index
+
+# Trace Python scripts using Agent SDK (or any command that spawns claude)
+claude-trace --exec "python my_agent_script.py"
+
+# Trace with separate args (no quoting needed)
+claude-trace --exec python -- examples/quick_start.py --some-arg
 ```
 
 ## Output Location
