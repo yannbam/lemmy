@@ -9,6 +9,7 @@ import {
 	ProcessedPair,
 	EnhancedMessageParam,
 } from "./shared-conversation-processor";
+import { getDefaultTraceDir } from "./interceptor";
 import type { TextBlockParam } from "@anthropic-ai/sdk/resources/messages";
 
 export interface ConversationSummary {
@@ -28,11 +29,12 @@ export interface LogSummary {
 }
 
 export class IndexGenerator {
-	private traceDir: string = ".claude-trace";
+	private traceDir: string;
 	private htmlGenerator: HTMLGenerator;
 	private conversationProcessor: SharedConversationProcessor;
 
-	constructor() {
+	constructor(baseDir?: string) {
+		this.traceDir = getDefaultTraceDir(baseDir);
 		this.htmlGenerator = new HTMLGenerator();
 		this.conversationProcessor = new SharedConversationProcessor();
 	}
