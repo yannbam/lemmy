@@ -20,6 +20,9 @@ claude-trace --include-all-requests
 # Run Claude with specific arguments
 claude-trace --run-with chat --model sonnet-3.5
 
+# Use custom output directory
+claude-trace --output-base-dir /path/to/traces
+
 # Show help
 claude-trace --help
 
@@ -36,7 +39,22 @@ claude-trace --generate-html logs.jsonl --include-all-requests
 claude-trace --index
 ```
 
-Logs are saved to `.claude-trace/log-YYYY-MM-DD-HH-MM-SS.{jsonl,html}` in your current directory. The HTML file is self-contained and opens in any browser without needing a server.
+## Output Location
+
+Logs are saved to `~/.claude-trace/<cwd-sanitized>/log-YYYY-MM-DD-HH-MM-SS.{jsonl,html}`.
+
+**Path sanitization:** Your current working directory path is converted to a folder name by replacing slashes with dashes:
+
+- `/home/jan/project` → `home-jan-project`
+- `/` → `_root`
+
+**Example:** Running from `/home/jan/myapp` saves to `~/.claude-trace/home-jan-myapp/`.
+
+**Override:** Use `--output-base-dir /custom/path` to change the base directory.
+
+**Migration:** Existing `.claude-trace/` directories in project roots are automatically migrated to the new centralized location on first run.
+
+The HTML file is self-contained and opens in any browser without needing a server.
 
 ## Request Filtering
 
@@ -57,7 +75,7 @@ claude-trace --index
 
 This feature:
 
-- Scans all `.jsonl` log files in `.claude-trace/` directory
+- Scans all `.jsonl` log files in the trace directory for the current working directory
 - Filters meaningful conversations (more than 2 messages, non-compacted)
 - Uses Claude CLI to generate titles and summaries for each conversation
 - Creates `summary-YYYY-MM-DD-HH-MM-SS.json` files with conversation metadata
@@ -137,7 +155,7 @@ The built artifacts are ready for npm publishing and include:
 1. **Backend** (`src/`)
 
    - **CLI** (`cli.ts`) - Command-line interface and argument parsing. Launches Claude Code and injects interceptors
-   - **Interceptor** (`interceptor.ts`) - injects itself into Claude Code, intercepts calls to fetch(), and logs them to JSONL files in .claude-trace/ in the current working dir.
+   - **Interceptor** (`interceptor.ts`) - injects itself into Claude Code, intercepts calls to fetch(), and logs them to JSONL files in ~/.claude-trace/<cwd-sanitized>/
    - **HTML Generator** (`html-generator.ts`) - Embeds frontend into self-contained HTML reports
    - **Index Generator** (`index-generator.ts`) - Creates AI-powered conversation summaries and searchable index
    - **Shared Conversation Processor** (`shared-conversation-processor.ts`) - Core conversation processing logic shared between frontend and backend

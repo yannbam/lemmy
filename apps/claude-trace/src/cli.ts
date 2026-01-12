@@ -3,7 +3,25 @@
 import { spawn, ChildProcess } from "child_process";
 import * as path from "path";
 import * as fs from "fs";
+import * as os from "os";
 import { HTMLGenerator } from "./html-generator";
+import { sanitizeCwd, getDefaultTraceDir } from "./interceptor";
+
+/**
+ * Migrate old CWD/.claude-trace/ directory to new centralized location.
+ * Only migrates if old exists and new doesn't.
+ */
+function migrateOldTraceDir(newTraceDir: string): void {
+	const oldDir = path.join(process.cwd(), ".claude-trace");
+
+	// Only migrate if old exists and new doesn't
+	if (fs.existsSync(oldDir) && !fs.existsSync(newTraceDir)) {
+		log(`Migrating traces: ${oldDir} → ${newTraceDir}`, "yellow");
+		fs.mkdirSync(path.dirname(newTraceDir), { recursive: true });
+		fs.renameSync(oldDir, newTraceDir);
+		log(`Migration complete`, "green");
+	}
+}
 
 // Colors for output
 export const colors = {
@@ -31,11 +49,12 @@ ${colors.yellow}USAGE:${colors.reset}
 ${colors.yellow}OPTIONS:${colors.reset}
   --extract-token    Extract OAuth token and exit (reproduces claude-token.py)
   --generate-html    Generate HTML report from JSONL file
-  --index           Generate conversation summaries and index for .claude-trace/ directory
+  --index           Generate conversation summaries and index for trace directory
   --run-with         Pass all following arguments to Claude process
   --include-all-requests Include all requests made through fetch, otherwise only requests to v1/messages with more than 2 messages in the context
   --no-open          Don't open generated HTML file in browser
   --log              Specify custom log file base name (without extension)
+  --output-base-dir  Override base directory (default: ~/.claude-trace)
   --claude-path      Specify custom path to Claude binary
   --help, -h         Show this help message
 
@@ -93,8 +112,11 @@ ${colors.yellow}EXAMPLES:${colors.reset}
   claude-trace --claude-path /usr/local/bin/claude
 
 ${colors.yellow}OUTPUT:${colors.reset}
-  Logs are saved to: ${colors.green}.claude-trace/log-YYYY-MM-DD-HH-MM-SS.{jsonl,html}${colors.reset}
-  With --log NAME:   ${colors.green}.claude-trace/NAME.{jsonl,html}${colors.reset}
+  Default:  ${colors.green}~/.claude-trace/<cwd-sanitized>/log-YYYY-MM-DD-HH-MM-SS.{jsonl,html}${colors.reset}
+  With --log NAME:               ${colors.green}.../<cwd-sanitized>/NAME.{jsonl,html}${colors.reset}
+  With --output-base-dir <path>: ${colors.green}<path>/<cwd-sanitized>/log-...{jsonl,html}${colors.reset}
+
+  CWD sanitization: /home/jan/project → home-jan-project
 
 ${colors.yellow}MIGRATION:${colors.reset}
   This tool replaces Python-based claude-logger and claude-token.py scripts
@@ -234,6 +256,7 @@ async function runClaudeWithInterception(
 	openInBrowser: boolean = false,
 	customClaudePath?: string,
 	logBaseName?: string,
+	outputBaseDir?: string,
 ): Promise<void> {
 	log("Claude Trace", "blue");
 	log("Starting Claude with traffic logging", "yellow");
@@ -258,6 +281,7 @@ async function runClaudeWithInterception(
 			CLAUDE_TRACE_INCLUDE_ALL_REQUESTS: includeAllRequests ? "true" : "false",
 			CLAUDE_TRACE_OPEN_BROWSER: openInBrowser ? "true" : "false",
 			...(logBaseName ? { CLAUDE_TRACE_LOG_NAME: logBaseName } : {}),
+			...(outputBaseDir ? { CLAUDE_TRACE_BASE_DIR: outputBaseDir } : {}),
 		},
 		stdio: "inherit",
 		cwd: process.cwd(),
@@ -304,14 +328,14 @@ async function runClaudeWithInterception(
 }
 
 // Scenario 2: --extract-token -> launch node with token interceptor and absolute path to claude
-async function extractToken(customClaudePath?: string): Promise<void> {
+async function extractToken(customClaudePath?: string, outputBaseDir?: string): Promise<void> {
 	const claudePath = getClaudeAbsolutePath(customClaudePath);
 
 	// Log to stderr so it doesn't interfere with token output
 	console.error(`Using Claude binary: ${claudePath}`);
 
-	// Create .claude-trace directory if it doesn't exist
-	const claudeTraceDir = path.join(process.cwd(), ".claude-trace");
+	// Create trace directory if it doesn't exist
+	const claudeTraceDir = getDefaultTraceDir(outputBaseDir);
 	if (!fs.existsSync(claudeTraceDir)) {
 		fs.mkdirSync(claudeTraceDir, { recursive: true });
 	}
@@ -431,10 +455,10 @@ async function generateHTMLFromCLI(
 }
 
 // Scenario 4: --index
-async function generateIndex(): Promise<void> {
+async function generateIndex(outputBaseDir?: string): Promise<void> {
 	try {
 		const { IndexGenerator } = await import("./index-generator");
-		const indexGenerator = new IndexGenerator();
+		const indexGenerator = new IndexGenerator(outputBaseDir);
 		await indexGenerator.generateIndex();
 		process.exit(0);
 	} catch (error) {
@@ -487,9 +511,20 @@ async function main(): Promise<void> {
 		logBaseName = claudeTraceArgs[logIndex + 1];
 	}
 
+	// Check for custom output base directory
+	let outputBaseDir: string | undefined;
+	const baseDirIndex = claudeTraceArgs.indexOf("--output-base-dir");
+	if (baseDirIndex !== -1 && claudeTraceArgs[baseDirIndex + 1]) {
+		outputBaseDir = claudeTraceArgs[baseDirIndex + 1];
+	}
+
+	// Calculate trace directory and run migration
+	const traceDir = getDefaultTraceDir(outputBaseDir);
+	migrateOldTraceDir(traceDir);
+
 	// Scenario 2: --extract-token
 	if (claudeTraceArgs.includes("--extract-token")) {
-		await extractToken(customClaudePath);
+		await extractToken(customClaudePath, outputBaseDir);
 		return;
 	}
 
@@ -520,12 +555,19 @@ async function main(): Promise<void> {
 
 	// Scenario 4: --index
 	if (claudeTraceArgs.includes("--index")) {
-		await generateIndex();
+		await generateIndex(outputBaseDir);
 		return;
 	}
 
 	// Scenario 1: No args (or claude with args) -> launch claude with interception
-	await runClaudeWithInterception(claudeArgs, includeAllRequests, openInBrowser, customClaudePath, logBaseName);
+	await runClaudeWithInterception(
+		claudeArgs,
+		includeAllRequests,
+		openInBrowser,
+		customClaudePath,
+		logBaseName,
+		outputBaseDir,
+	);
 }
 
 main().catch((error) => {

@@ -1,12 +1,37 @@
 import fs from "fs";
+import os from "os";
 import path from "path";
 import { spawn } from "child_process";
 import { RawPair } from "./types";
 import { HTMLGenerator } from "./html-generator";
 
+/**
+ * Sanitize a CWD path into a valid directory name.
+ * /home/jan/project → home-jan-project
+ * / → _root
+ */
+export function sanitizeCwd(cwd: string): string {
+	// Strip leading slash, replace remaining slashes with dashes
+	const sanitized = cwd.replace(/^\//, "").replace(/\//g, "-");
+	// Handle root case (empty string after stripping /)
+	return sanitized || "_root";
+}
+
+/**
+ * Get the default trace directory based on the current working directory.
+ * Default: $HOME/.claude-trace/<sanitized-cwd>/
+ * With baseDir override: <baseDir>/<sanitized-cwd>/
+ */
+export function getDefaultTraceDir(baseDir?: string): string {
+	const base = baseDir || path.join(os.homedir(), ".claude-trace");
+	const sanitized = sanitizeCwd(process.cwd());
+	return path.join(base, sanitized);
+}
+
 export interface InterceptorConfig {
 	logDirectory?: string;
 	logBaseName?: string;
+	baseDir?: string; // Override base directory (default: $HOME/.claude-trace)
 	enableRealTimeHTML?: boolean;
 	logLevel?: "debug" | "info" | "warn" | "error";
 }
@@ -21,8 +46,12 @@ export class ClaudeTrafficLogger {
 	private htmlGenerator: HTMLGenerator;
 
 	constructor(config: InterceptorConfig = {}) {
+		// Determine log directory: explicit logDirectory > baseDir-derived > env var > default
+		const baseDir = config.baseDir || process.env.CLAUDE_TRACE_BASE_DIR;
+		const logDirectory = config.logDirectory || getDefaultTraceDir(baseDir);
+
 		this.config = {
-			logDirectory: ".claude-trace",
+			logDirectory,
 			enableRealTimeHTML: true,
 			logLevel: "info",
 			...config,
